@@ -22,6 +22,16 @@ SELECT id, track_id, score FROM (
         subarray(extract_fp_query(query), %(part_start)s, %(part_length)s) && extract_fp_query(fingerprint)
 ) f WHERE score > %(min_score)s ORDER BY score DESC, id
 """
+ID_SEARCH_SQL = """
+SELECT id, track_id, score FROM (
+    SELECT id, track_id, acoustid_compare(fingerprint, query) AS score
+    FROM fingerprint, (SELECT %(fp)s::int4[] AS query) q
+    WHERE
+        length BETWEEN %(length)s - %(max_length_diff)s AND %(length)s + %(max_length_diff)s AND
+        id IN (%(ids)s)
+) f WHERE score > %(min_score)s ORDER BY score DESC, id
+"""
+EXTRACT_QUERY_SQL = """SELECT extract_fp_query(%(fp)s::int4[])"""
 
 
 def decode_fingerprint(fingerprint_string):
@@ -29,6 +39,25 @@ def decode_fingerprint(fingerprint_string):
     fingerprint, version = chromaprint.decode_fingerprint(fingerprint_string)
     if version == FINGERPRINT_VERSION:
         return fingerprint
+
+
+def lookup_fingerprint_indexed(conn, idx, fp, length, good_enough_score, min_score):
+    """Search for a fingerprint in the database"""
+    query = conn.execute(EXTRACT_QUERY_SQL, {'fp': fp}).scalar()
+    results = idx.search(query)
+    max_score = max(r.score for r in results)
+    ids = [r.id for r in results if 100 * r.score / max_score > 20] # take the top 90% matches
+    matched = []
+    best_score = 0.0
+    params = dict(fp=fp, length=length, max_length_diff=MAX_LENGTH_DIFF, min_score=min_score)
+    with closing(conn.execute(ID_SEARCH_SQL, params)) as result:
+        for row in result:
+            matched.append(row)
+            if row['score'] >= best_score:
+                best_score = row['score']
+        if best_score > good_enough_score:
+            break
+    return matched
 
 
 def lookup_fingerprint(conn, fp, length, good_enough_score, min_score, fast=False):

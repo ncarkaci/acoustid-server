@@ -157,7 +157,8 @@ class LookupHandler(APIHandler):
     def _handle_internal(self, params):
         response = {}
         response['results'] = results = []
-        matches = lookup_fingerprint(self.conn, params.fingerprint, params.duration, 0.7, 0.3)
+        idx = IndexClient(self.config.index.host, self.config.index.port)
+        matches = lookup_fingerprint(self.conn, idx, params.fingerprint, params.duration, 0.7, 0.3)
         result_map = {}
         for fingerprint_id, track_id, score in matches:
             if track_id in result_map:

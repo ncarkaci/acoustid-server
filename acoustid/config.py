@@ -62,6 +62,17 @@ class DatabaseConfig(object):
             self.password = parser.get(section, 'password')
 
 
+class IndexConfig(object):
+
+    def __init__(self):
+        self.host = None
+        self.port = None
+
+    def read(self, parser, section):
+        self.host = parser.get(section, 'host')
+        self.port = parser.getint(section, 'port')
+
+
 class LoggingConfig(object):
 
     def __init__(self):
@@ -110,6 +121,8 @@ class Config(object):
         parser.read(path)
         self.database = DatabaseConfig()
         self.database.read(parser, 'database')
+        self.index = WebSiteConfig()
+        self.index.read(parser, 'index')
         self.logging = LoggingConfig()
         self.logging.read(parser, 'logging')
         self.website = WebSiteConfig()
