@@ -26,6 +26,7 @@ test:
     POSTGRES_USER: acoustid
     POSTGRES_PASSWORD: acoustid
     POSTGRES_DB: acoustid_test
+    ACOUSTID_TEST_DB_TWO_PHASE_COMMIT: 0
     ACOUSTID_TEST_DB_DEFAULT_HOST: postgres
     ACOUSTID_TEST_DB_DEFAULT_NAME: acoustid_test
     ACOUSTID_TEST_DB_SLOW_HOST: postgres
