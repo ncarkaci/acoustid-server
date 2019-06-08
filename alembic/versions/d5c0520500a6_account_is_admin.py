@@ -16,11 +16,27 @@ from alembic import op
 import sqlalchemy as sa
 
 
-def upgrade():
+def upgrade(engine_name):
+    globals()["upgrade_%s" % engine_name]()
+
+
+def downgrade(engine_name):
+    globals()["downgrade_%s" % engine_name]()
+
+
+def upgrade_default():
     op.add_column('account',
         sa.Column('is_admin', sa.Boolean(), server_default=sa.text('false'), nullable=False)
     )
 
 
-def downgrade():
+def downgrade_default():
     op.drop_column('account', 'is_admin')
+
+
+def upgrade_slow():
+    pass
+
+
+def downgrade_slow():
+    pass

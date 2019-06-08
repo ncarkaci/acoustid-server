@@ -16,7 +16,15 @@ from alembic import op
 import sqlalchemy as sa
 
 
-def upgrade():
+def upgrade(engine_name):
+    globals()["upgrade_%s" % engine_name]()
+
+
+def downgrade(engine_name):
+    globals()["downgrade_%s" % engine_name]()
+
+
+def upgrade_default():
     op.drop_constraint(u'fingerprint_source_fk_submission_id', 'fingerprint_source', type_='foreignkey')
     op.drop_constraint(u'track_foreignid_source_fk_submission_id', 'track_foreignid_source', type_='foreignkey')
     op.drop_constraint(u'track_mbid_source_fk_submission_id', 'track_mbid_source', type_='foreignkey')
@@ -24,9 +32,17 @@ def upgrade():
     op.drop_constraint(u'track_puid_source_fk_submission_id', 'track_puid_source', type_='foreignkey')
 
 
-def downgrade():
+def downgrade_default():
     op.create_foreign_key(u'track_puid_source_fk_submission_id', 'track_puid_source', 'submission', ['submission_id'], ['id'])
     op.create_foreign_key(u'track_meta_source_fk_submission_id', 'track_meta_source', 'submission', ['submission_id'], ['id'])
     op.create_foreign_key(u'track_mbid_source_fk_submission_id', 'track_mbid_source', 'submission', ['submission_id'], ['id'])
     op.create_foreign_key(u'track_foreignid_source_fk_submission_id', 'track_foreignid_source', 'submission', ['submission_id'], ['id'])
     op.create_foreign_key(u'fingerprint_source_fk_submission_id', 'fingerprint_source', 'submission', ['submission_id'], ['id'])
+
+
+def upgrade_slow():
+    pass
+
+
+def downgrade_slow():
+    pass

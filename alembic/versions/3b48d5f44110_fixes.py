@@ -16,7 +16,15 @@ from alembic import op
 import sqlalchemy as sa
 
 
-def upgrade():
+def upgrade(engine_name):
+    globals()["upgrade_%s" % engine_name]()
+
+
+def downgrade(engine_name):
+    globals()["downgrade_%s" % engine_name]()
+
+
+def upgrade_default():
     op.create_foreign_key(op.f('account_google_fk_account_id'), 'account_google', 'account', ['account_id'], ['id'])
     op.create_foreign_key(op.f('application_fk_account_id'), 'application', 'account', ['account_id'], ['id'])
     op.create_foreign_key(op.f('stats_lookups_fk_application_id'), 'stats_lookups', 'application', ['application_id'], ['id'])
@@ -46,7 +54,7 @@ def upgrade():
     op.alter_column('recording_acoustid', 'created', nullable=False)
 
 
-def downgrade():
+def downgrade_default():
     op.alter_column('recording_acoustid', 'created', nullable=True)
     op.alter_column('track_foreignid_source', 'created', nullable=True)
     op.alter_column('track_foreignid', 'created', nullable=True)
@@ -74,3 +82,11 @@ def downgrade():
     op.drop_constraint(op.f('stats_lookups_fk_application_id'), 'stats_lookups', type_='foreignkey')
     op.drop_constraint(op.f('application_fk_account_id'), 'application', type_='foreignkey')
     op.drop_constraint(op.f('account_google_fk_account_id'), 'account_google', type_='foreignkey')
+
+
+def upgrade_slow():
+    pass
+
+
+def downgrade_slow():
+    pass

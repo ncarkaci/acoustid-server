@@ -1,8 +1,14 @@
 [database]
+name=acoustid
 user=acoustid
 password=XXX
-superuser=postgres
+host=localhost
+port=5432
+
+[database_slow]
 name=acoustid
+user=acoustid
+password=XXX
 host=localhost
 port=5432
 

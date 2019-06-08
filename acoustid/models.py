@@ -79,3 +79,11 @@ class StatsLookups(Base):
     __table__ = tables.stats_lookups
 
     application = relationship('Application')
+
+
+class Submission(Base):
+    __table__ = tables.submission
+
+
+class SubmissionResult(Base):
+    __table__ = tables.submission_result

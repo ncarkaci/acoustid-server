@@ -8,18 +8,15 @@ import time
 import operator
 from typing import Type
 from acoustid import const
+from acoustid.db import DatabaseContext
 from acoustid.const import MAX_REQUESTS_PER_SECOND
 from acoustid.handler import Handler
+from acoustid.models import Application, Account, Submission, SubmissionResult, Track
 from acoustid.data.track import lookup_mbids, resolve_track_gid, lookup_meta_ids
 from acoustid.data.musicbrainz import lookup_metadata
-from acoustid.data.submission import insert_submission, lookup_submission_status
 from acoustid.data.fingerprint import decode_fingerprint, FingerprintSearcher
-from acoustid.data.format import find_or_insert_format
 from acoustid.data.application import lookup_application_id_by_apikey
-from acoustid.data.account import lookup_account_id_by_apikey
-from acoustid.data.source import find_or_insert_source
-from acoustid.data.meta import insert_meta, lookup_meta
-from acoustid.data.foreignid import find_or_insert_foreignid
+from acoustid.data.meta import lookup_meta
 from acoustid.data.stats import update_lookup_counter, update_user_agent_counter, update_lookup_avg_time
 from acoustid.ratelimiter import RateLimiter
 from werkzeug.utils import cached_property
@@ -103,6 +100,7 @@ class APIHandler(Handler):
         else:
             connect = server.engine.connect
         handler = cls(connect=connect)
+        handler.server = server
         handler.index = server.index
         handler.redis = server.redis
         handler.config = server.config
@@ -564,6 +562,7 @@ class LookupHandler(APIHandler):
                 matches = [(0, track_id, p['track_gid'], 1.0)]
             else:
                 matches = searcher.search(p['fingerprint'], p['duration'])
+                print(repr(matches))
             all_matches.append(matches)
         response = {}
         if params.batch:
@@ -589,37 +588,121 @@ class LookupHandler(APIHandler):
         return response
 
 
+class APIHandlerWithORM(APIHandler):
+
+    params_class = None  # type: Type[APIHandlerParams]
+
+    def __init__(self, server):
+        self.server = server
+
+    @property
+    def index(self):
+        return self.server.index
+
+    @property
+    def redis(self):
+        return self.server.redis
+
+    @property
+    def config(self):
+        return self.server.config
+
+    @classmethod
+    def create_from_server(cls, server):
+        return cls(server=server)
+
+    def _rate_limit(self, user_ip, application_id):
+        ip_rate_limit = self.config.rate_limiter.ips.get(user_ip, MAX_REQUESTS_PER_SECOND)
+        if self.rate_limiter.limit('ip', user_ip, ip_rate_limit):
+            if application_id == DEMO_APPLICATION_ID:
+                raise errors.TooManyRequests(ip_rate_limit)
+        if application_id is not None:
+            application_rate_limit = self.config.rate_limiter.applications.get(application_id)
+            if application_rate_limit is not None:
+                if self.rate_limiter.limit('app', application_id, application_rate_limit):
+                    if application_id == DEMO_APPLICATION_ID:
+                        raise errors.TooManyRequests(application_rate_limit)
+
+    def handle(self, req):
+        params = self.params_class(self.config)
+        if req.access_route:
+            self.user_ip = req.access_route[0]
+        else:
+            self.user_ip = req.remote_addr
+        self.is_secure = req.is_secure
+        self.user_agent = req.user_agent
+        self.rate_limiter = RateLimiter(self.redis, 'rl')
+        try:
+            with DatabaseContext(self.server) as db:
+                self.db = db
+                try:
+                    try:
+                        params.parse(req.values, db)
+                        self._rate_limit(self.user_ip, getattr(params, 'application_id', None))
+                        return self._ok(self._handle_internal(params), params.format)
+                    except errors.WebServiceError:
+                        raise
+                    except Exception:
+                        logger.exception('Error while handling API request')
+                        raise errors.InternalError()
+                finally:
+                    self.db = None
+        except errors.WebServiceError as e:
+            logger.warning("WS error: %s", e.message)
+            return self._error(e.code, e.message, params.format, status=e.status)
+
+
+def get_submission_status(db, submission_ids):
+    submissions = (
+        db.session.query(SubmissionResult.submission_id, SubmissionResult.track_id)
+        .filter(SubmissionResult.submission_id.in_(submission_ids))
+    )
+    track_ids = {submission_id: track_id for (submission_id, track_id) in submissions}
+
+    tracks = (
+        db.session.query(Track.id, Track.gid)
+        .filter(Track.id.in_(track_ids.values()))
+    )
+    track_gids = {track_id: track_gid for (track_id, track_gid) in tracks}
+
+    response = {'submissions': []}
+    for submission_id in submission_ids:
+        submission_response = {'id': submission_id, 'status': 'pending'}
+        track_id = track_ids.get(submission_id)
+        if track_id is not None:
+            track_gid = track_gids.get(track_id)
+            if track_gid is not None:
+                submission_response.update({
+                    'status': 'imported',
+                    'response': {'id': track_gid},
+                })
+        response['submissions'].append(submission_response)
+    return response
+
+
 class SubmissionStatusHandlerParams(APIHandlerParams):
 
-    def parse(self, values, conn):
-        super(SubmissionStatusHandlerParams, self).parse(values, conn)
-        self._parse_client(values, conn)
+    def parse(self, values, db):
+        super(SubmissionStatusHandlerParams, self).parse(values, db)
+        self._parse_client(values, db.session.connection(mapper=Application))
         self.ids = values.getlist('id', type=int)
 
 
-class SubmissionStatusHandler(APIHandler):
+class SubmissionStatusHandler(APIHandlerWithORM):
 
     params_class = SubmissionStatusHandlerParams
 
     def _handle_internal(self, params):
-        response = {'submissions': [{'id': id, 'status': 'pending'} for id in params.ids]}
-        tracks = lookup_submission_status(self.conn, params.ids)
-        for submission in response['submissions']:
-            id = submission['id']
-            track_gid = tracks.get(id)
-            if track_gid is not None:
-                submission['status'] = 'imported'
-                submission['result'] = {'id': track_gid}
-        return response
+        return get_submission_status(self.db, params.ids)
 
 
 class SubmitHandlerParams(APIHandlerParams):
 
-    def _parse_user(self, values, conn):
+    def _parse_user(self, values, db):
         account_apikey = values.get('user')
         if not account_apikey:
             raise errors.MissingParameterError('user')
-        self.account_id = lookup_account_id_by_apikey(conn, account_apikey)
+        self.account_id = db.session.query(Account.id).filter(Account.apikey == account_apikey).scalar()
         if not self.account_id:
             raise errors.InvalidUserAPIKeyError()
 
@@ -640,8 +723,8 @@ class SubmitHandlerParams(APIHandlerParams):
         p['foreignid'] = values.get('foreignid' + suffix)
         if p['foreignid'] and not is_foreignid(p['foreignid']):
             raise errors.InvalidForeignIDError('foreignid' + suffix)
-        p['mbids'] = values.getlist('mbid' + suffix)
-        if p['mbids'] and not all(map(is_uuid, p['mbids'])):
+        p['mbid'] = values.get('mbid' + suffix)
+        if p['mbid'] and not is_uuid(p['mbid']):
             raise errors.InvalidUUIDError('mbid' + suffix)
         self._parse_duration_and_format(p, values, suffix)
         fingerprint_string = values.get('fingerprint' + suffix)
@@ -662,10 +745,10 @@ class SubmitHandlerParams(APIHandlerParams):
         p['year'] = values.get('year' + suffix, type=int)
         self.submissions.append(p)
 
-    def parse(self, values, conn):
-        super(SubmitHandlerParams, self).parse(values, conn)
-        self._parse_client(values, conn)
-        self._parse_user(values, conn)
+    def parse(self, values, db):
+        super(SubmitHandlerParams, self).parse(values, db)
+        self._parse_client(values, db.session.connection(mapper=Application))
+        self._parse_user(values, db)
         self.wait = values.get('wait', type=int, default=0)
         self.submissions = []
         suffixes = list(iter_args_suffixes(values, 'fingerprint'))
@@ -679,73 +762,45 @@ class SubmitHandlerParams(APIHandlerParams):
                     raise
 
 
-class SubmitHandler(APIHandler):
+class SubmitHandler(APIHandlerWithORM):
 
     params_class = SubmitHandlerParams
     meta_fields = ('track', 'artist', 'album', 'album_artist', 'track_no',
                    'disc_no', 'year')
 
     def _handle_internal(self, params):
-        response = {'submissions': []}
-        ids = set()
-        with self.conn.begin():
-            source_id = find_or_insert_source(self.conn, params.application_id, params.account_id, params.application_version)
-            format_ids = {}
-            for p in params.submissions:
-                if p['format']:
-                    if p['format'] not in format_ids:
-                        format_ids[p['format']] = find_or_insert_format(self.conn, p['format'])
-                    p['format_id'] = format_ids[p['format']]
-            for p in params.submissions:
-                mbids = p['mbids'] or [None]
-                for mbid in mbids:
-                    values = {
-                        'mbid': mbid or None,
-                        'puid': p['puid'] or None,
-                        'bitrate': p['bitrate'] or None,
-                        'fingerprint': p['fingerprint'],
-                        'length': p['duration'],
-                        'format_id': p.get('format_id'),
-                        'source_id': source_id
-                    }
-                    meta_values = dict((n, p[n] or None) for n in self.meta_fields)
-                    if any(meta_values.itervalues()):
-                        values['meta_id'] = insert_meta(self.conn, meta_values)
-                    if p['foreignid']:
-                        values['foreignid_id'] = find_or_insert_foreignid(self.conn, p['foreignid'])
-                    id = insert_submission(self.conn, values)
-                    ids.add(id)
-                    submission = {'id': id, 'status': 'pending'}
-                    if p['index']:
-                        submission['index'] = p['index']
-                    response['submissions'].append(submission)
+        ids = {}
+        for p in params.submissions:
+            submission = Submission()
+            submission.account_id = params.account_id
+            submission.application_id = params.application_id
+            submission.application_version = params.application_version
+            submission.fingerprint = p['fingerprint']
+            submission.duration = p['duration']
+            submission.mbid = p['mbid'] or None
+            submission.puid = p['puid'] or None
+            submission.foreignid = p['foreignid'] or None
+            submission.bitrate = p['bitrate'] or None
+            submission.format = p['format'] or None
+            submission.track = p['track'] or None
+            submission.artist = p['artist'] or None
+            submission.album = p['album'] or None
+            submission.album_artist = p['album_artist'] or None
+            submission.track_no = p['track_no'] or None
+            submission.disc_no = p['disc_no'] or None
+            submission.year = p['year'] or None
+            self.db.session.add(submission)
+            self.db.session.flush()
+            ids[submission.id] = p['index']
 
-        if self.redis is not None:
-            self.redis.publish('channel.submissions', json.dumps(list(ids)))
+        self.db.session.commit()
 
-        clients_waiting_key = 'submission.waiting'
-        clients_waiting = self.redis.incr(clients_waiting_key) - 1
-        try:
-            max_wait = 10
-            self.redis.expire(clients_waiting_key, max_wait)
-            tracks = {}
-            remaining = min(max(0, max_wait - 2 ** clients_waiting), params.wait)
-            logger.debug('starting to wait at %f %d', remaining, clients_waiting)
-            while remaining > 0 and ids:
-                logger.debug('waiting %f seconds', remaining)
-                time.sleep(0.5)  # XXX replace with LISTEN/NOTIFY
-                remaining -= 0.5
-                tracks = lookup_submission_status(self.conn, ids)
-                if not tracks:
-                    continue
-                for submission in response['submissions']:
-                    id = submission['id']
-                    track_gid = tracks.get(id)
-                    if track_gid is not None:
-                        submission['status'] = 'imported'
-                        submission['result'] = {'id': track_gid}
-                        ids.remove(id)
-        finally:
-            self.redis.decr(clients_waiting_key)
+        self.redis.publish('channel.submissions', json.dumps(list(ids.keys())))
 
+        response = get_submission_status(self.db, list(ids.keys()))
+        for submission_response in response['submissions']:
+            submission_id = submission_response['id']
+            index = ids[submission_id]
+            if index:
+                submission_response['index'] = index
         return response

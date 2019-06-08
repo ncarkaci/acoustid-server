@@ -16,7 +16,16 @@ from alembic import op
 import sqlalchemy as sa
 from sqlalchemy.dialects import postgresql
 
-def upgrade():
+
+def upgrade(engine_name):
+    globals()["upgrade_%s" % engine_name]()
+
+
+def downgrade(engine_name):
+    globals()["downgrade_%s" % engine_name]()
+
+
+def upgrade_default():
     op.create_table('account_google',
         sa.Column('google_user_id', sa.String(), nullable=False),
         sa.Column('account_id', sa.Integer(), nullable=False),
@@ -356,7 +365,7 @@ def upgrade():
     )
 
 
-def downgrade():
+def downgrade_default():
     op.drop_table('track_puid_source')
     op.drop_table('track_meta_source')
     op.drop_index(op.f('track_mbid_source_idx_track_mbid_id'), table_name='track_mbid_source')
@@ -422,3 +431,11 @@ def downgrade():
     op.drop_table('account_stats_control')
     op.drop_index('account_google_idx_account_id', table_name='account_google')
     op.drop_table('account_google')
+
+
+def upgrade_slow():
+    pass
+
+
+def downgrade_slow():
+    pass

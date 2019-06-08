@@ -5,9 +5,10 @@ import sentry_sdk
 from sentry_sdk.integrations.flask import FlaskIntegration
 from flask import Flask, request, session
 from flask.sessions import SecureCookieSessionInterface
-from werkzeug.contrib.fixers import ProxyFix
+from werkzeug.middleware.proxy_fix import ProxyFix
 from sqlalchemy.orm import scoped_session
 from acoustid.script import Script
+from acoustid.db import get_session_args
 from acoustid.web import db
 from acoustid.web.views.general import general_page
 from acoustid.web.views.user import user_page
@@ -36,6 +37,8 @@ def make_application(config_filename=None, tests=False):
         GOOGLE_OAUTH_CLIENT_ID=config.website.google_oauth_client_id,
         GOOGLE_OAUTH_CLIENT_SECRET=config.website.google_oauth_client_secret,
     )
+    if tests:
+        app.config['TESTING'] = True
 
     app.acoustid_script = script
     app.acoustid_config = config
@@ -88,7 +91,7 @@ def make_application(config_filename=None, tests=False):
         from acoustid.api import get_health_response
         return get_health_response(script, request)
 
-    db.session_factory.configure(bind=config.database.create_engine())
+    db.session_factory.configure(**get_session_args(script))
     db.session = scoped_session(db.session_factory, scopefunc=get_flask_request_scope)
 
     app.register_blueprint(general_page)

@@ -11,9 +11,24 @@ from optparse import OptionParser
 from acoustid.config import Config
 from acoustid.indexclient import IndexClientPool
 from acoustid.utils import LocalSysLogHandler
+from acoustid.db import DatabaseContext
 from acoustid._release import GIT_RELEASE
 
 logger = logging.getLogger(__name__)
+
+
+class ScriptContext(object):
+
+    def __init__(self, db, redis, index):
+        self.db = db
+        self.redis = redis
+        self.index = index
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.db.close()
 
 
 class Script(object):
@@ -23,24 +38,29 @@ class Script(object):
         if config_path:
             self.config.read(config_path)
         self.config.read_env(tests=tests)
-        if tests:
-            self.engine = sqlalchemy.create_engine(self.config.database.create_url(),
-                poolclass=sqlalchemy.pool.AssertionPool)
-        else:
-            self.engine = sqlalchemy.create_engine(self.config.database.create_url())
+
+        create_engine_kwargs = {'poolclass': sqlalchemy.pool.AssertionPool} if tests else {}
+        self.db_engines = self.config.databases.create_engines(**create_engine_kwargs)
+
         if not self.config.index.host:
             self.index = None
         else:
             self.index = IndexClientPool(host=self.config.index.host,
                                          port=self.config.index.port,
                                          recycle=60)
+
         if not self.config.redis.host:
             self.redis = None
         else:
             self.redis = Redis(host=self.config.redis.host,
                                port=self.config.redis.port)
+
         self._console_logging_configured = False
         self.setup_logging()
+
+    @property
+    def engine(self):
+        return self.db_engines['default']
 
     def setup_logging(self):
         for logger_name, level in sorted(self.config.logging.levels.items()):
@@ -65,6 +85,10 @@ class Script(object):
 
     def setup_sentry(self):
         sentry_sdk.init(self.config.sentry.script_dsn, release=GIT_RELEASE)
+
+    def context(self):
+        db = DatabaseContext(self).session
+        return ScriptContext(db=db, redis=self.redis, index=self.index)
 
 
 def run_script(func, option_cb=None, master_only=False):

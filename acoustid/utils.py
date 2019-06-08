@@ -9,6 +9,7 @@ import datetime
 import hmac
 import base64
 import six
+from acoustid.const import MAX_FOREIGNID_NAMESPACE_LENGTH, MAX_FOREIGNID_VALUE_LENGTH
 from six.moves.urllib.request import urlopen
 from six.moves.urllib.parse import urlencode
 from logging import Handler
@@ -54,7 +55,15 @@ def is_int(s):
 
 
 def is_foreignid(s):
-    return bool(re.match(r'^[0-9a-z]+:.+$', s))
+    match = re.match(r'^([0-9a-z]+):(.+)$', s)
+    if match is None:
+        return False
+    namespace, value = match.groups()
+    if len(namespace) > MAX_FOREIGNID_NAMESPACE_LENGTH:
+        return False
+    if len(value) > MAX_FOREIGNID_VALUE_LENGTH:
+        return False
+    return True
 
 
 def singular(plural):

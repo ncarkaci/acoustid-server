@@ -9,7 +9,7 @@ from cStringIO import StringIO
 from werkzeug.exceptions import HTTPException
 from werkzeug.routing import Map, Rule, Submount
 from werkzeug.wrappers import Request
-from werkzeug.contrib.fixers import ProxyFix
+from werkzeug.middleware.proxy_fix import ProxyFix
 from acoustid.script import Script
 from acoustid._release import GIT_RELEASE
 import acoustid.api.v1
@@ -53,12 +53,15 @@ admin_url_rules = [
 
 class Server(Script):
 
-    def __init__(self, config_path):
-        super(Server, self).__init__(config_path)
+    def __init__(self, config_path, **kwargs):
+        super(Server, self).__init__(config_path, **kwargs)
         url_rules = api_url_rules + admin_url_rules
         self.url_map = Map(url_rules, strict_slashes=False)
 
     def __call__(self, environ, start_response):
+        return self.wsgi_app(environ, start_response)
+
+    def wsgi_app(self, environ, start_response):
         urls = self.url_map.bind_to_environ(environ)
         handler = None
         try:
@@ -112,16 +115,16 @@ def add_cors_headers(app):
     return wrapped_app
 
 
-def make_application(config_path):
+def make_application(config_path, **kwargs):
     """Construct a WSGI application for the AcoustID server
 
     :param config_path: path to the server configuration file
     """
-    server = Server(config_path)
+    server = Server(config_path, **kwargs)
     server.setup_sentry()
-    app = GzipRequestMiddleware(server)
-    app = ProxyFix(app)
-    app = SentryWsgiMiddleware(app)
-    app = replace_double_slashes(app)
-    app = add_cors_headers(app)
-    return server, app
+    server.wsgi_app = GzipRequestMiddleware(server.wsgi_app)
+    server.wsgi_app = ProxyFix(server.wsgi_app)
+    server.wsgi_app = SentryWsgiMiddleware(server.wsgi_app)
+    server.wsgi_app = replace_double_slashes(server.wsgi_app)
+    server.wsgi_app = add_cors_headers(server.wsgi_app)
+    return server

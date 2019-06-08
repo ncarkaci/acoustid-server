@@ -28,6 +28,7 @@ def insert_submission(conn, data):
             'source_id': data.get('source_id'),
             'format_id': data.get('format_id'),
             'meta_id': data.get('meta_id'),
+            'foreignid': data.get('foreignid'),
             'foreignid_id': data.get('foreignid_id'),
         })
         id = conn.execute(insert_stmt).inserted_primary_key[0]

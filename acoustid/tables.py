@@ -1,6 +1,7 @@
+import sqlalchemy
 import sqlalchemy.event
 from sqlalchemy import (
-    MetaData, Table, Column, Index,
+    MetaData, Table, Column, Index, Sequence,
     ForeignKey, CheckConstraint,
     Integer, String, DateTime, Boolean, Date, Text, SmallInteger, BigInteger, CHAR,
     DDL, sql,
@@ -103,7 +104,7 @@ source = Table('source', metadata,
     Index('source_idx_uniq', 'application_id', 'account_id', 'version', unique=True),
 )
 
-submission = Table('submission', metadata,
+submission_old = Table('submission_old', metadata,
     Column('id', Integer, primary_key=True),
     Column('fingerprint', ARRAY(Integer), nullable=False),
     Column('length', SmallInteger, CheckConstraint('length>0'), nullable=False),
@@ -118,7 +119,55 @@ submission = Table('submission', metadata,
     Column('foreignid_id', Integer, ForeignKey('foreignid.id')),
 )
 
-Index('submission_idx_handled', submission.c.id, postgresql_where=submission.c.handled == False)  # noqa: E712
+Index('submission_idx_handled', submission_old.c.id, postgresql_where=submission_old.c.handled == False)  # noqa: E712
+
+submission_id_seq = Sequence('submission_id_seq', metadata=metadata)
+
+submission = Table('submission', metadata,
+    Column('id', Integer, submission_id_seq, server_default=submission_id_seq.next_value(), primary_key=True),
+    Column('created', DateTime(timezone=True), server_default=sql.func.current_timestamp(), nullable=False),
+    Column('handled', Boolean, default=False, server_default=sql.false()),
+
+    Column('account_id', Integer, nullable=False),  # ForeignKey('account.id')
+    Column('application_id', Integer, nullable=False),  # ForeignKey('application.id')
+    Column('application_version', String),
+
+    Column('fingerprint', ARRAY(Integer), nullable=False),
+    Column('duration', Integer, CheckConstraint('duration>0'), nullable=False),
+    Column('bitrate', Integer, CheckConstraint('bitrate>0')),
+    Column('format', String),
+    Column('mbid', UUID),
+    Column('puid', UUID),
+    Column('foreignid', String),
+
+    Column('track', String),
+    Column('artist', String),
+    Column('album', String),
+    Column('album_artist', String),
+    Column('track_no', Integer),
+    Column('disc_no', Integer),
+    Column('year', Integer),
+
+    info={'bind_key': 'slow'},
+)
+
+submission_result = Table('submission_result', metadata,
+    Column('submission_id', Integer, primary_key=True, autoincrement=False),
+    Column('created', DateTime(timezone=True), server_default=sql.func.current_timestamp(), nullable=False),
+
+    Column('account_id', Integer, nullable=False),  # ForeignKey('account.id')
+    Column('application_id', Integer, nullable=False),  # ForeignKey('application.id')
+    Column('application_version', String),
+
+    Column('fingerprint_id', Integer, nullable=False),  # ForeignKey('fingerprint.id')
+    Column('track_id', Integer, nullable=False),  # ForeignKey('track.id')
+    Column('meta_id', Integer),  # ForeignKey('meta.id')
+    Column('mbid', UUID),
+    Column('puid', UUID),
+    Column('foreignid', String),
+
+    info={'bind_key': 'slow'},
+)
 
 stats = Table('stats', metadata,
     Column('id', Integer, primary_key=True),
@@ -192,6 +241,8 @@ fingerprint = Table('fingerprint', metadata,
     Index('fingerprint_idx_length', 'length'),
     Index('fingerprint_idx_track_id', 'track_id'),
 )
+
+fingerprint.add_is_dependent_on(track)
 
 fingerprint_source = Table('fingerprint_source', metadata,
     Column('id', Integer, primary_key=True),
