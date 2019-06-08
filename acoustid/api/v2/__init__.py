@@ -546,7 +546,6 @@ class LookupHandler(APIHandler):
         return seen
 
     def _handle_internal(self, params):
-        import time
         t = time.time()
         update_user_agent_counter(self.redis, params.application_id, self.user_agent, self.user_ip)
         searcher = FingerprintSearcher(self.conn, self.index)

@@ -404,7 +404,7 @@ class Config(object):
             prefix = 'ACOUSTID_TEST_'
         else:
             prefix = 'ACOUSTID_'
-        self.databases.read_env(prefix)
+        self.databases.read_env(prefix + 'DB_')
         self.logging.read_env(prefix)
         self.website.read_env(prefix)
         self.index.read_env(prefix)
