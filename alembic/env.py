@@ -63,7 +63,7 @@ def run_migrations_offline():
         )
 
         with context.begin_transaction():
-            context.run_migrations()
+            context.run_migrations(engine_name=name)
 
 
 def run_migrations_online():
